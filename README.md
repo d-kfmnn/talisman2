@@ -1,4 +1,4 @@
-# talisman
+# TalisMan 2.0
 
 TalisMan Version 2.0
 is a verification and analysis tool for AIG-based circuits.
