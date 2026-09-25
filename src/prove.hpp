@@ -10,8 +10,8 @@
 #define TALISMAN_SRC_PROVE_H_
 /*------------------------------------------------------------------------*/
 #include "linpolynomial.hpp"
+#include "sat_backend.hpp"
 #include "subcircuit.hpp"
-#include <cadical.hpp>
 #include <chrono>
 #include <list>
 
@@ -22,12 +22,12 @@ extern std::chrono::duration<double> total_enc_circuit_time;
 extern std::chrono::duration<double> total_prove_time;
 
 int32_t
-encode_subcircuit(Subcircuit& sc, CaDiCaL::Solver* solver);
+encode_subcircuit(Subcircuit& sc, SatSolver* solver);
 
 bool
 prove_guess(Subcircuit& sc,
             LinPolynomial& guess,
-            CaDiCaL::Solver* solver,
+            SatSolver* solver,
             std::vector<std::vector<int>>& repair_samples,
             int prime,
             int32_t& fresh_var,

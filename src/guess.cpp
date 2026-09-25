@@ -11,10 +11,11 @@
 #include "linear_algebra.hpp"
 #include "nmod.h"
 #include "prove.hpp"
+#include "run_control.hpp"
+#include "sat_backend.hpp"
 #include "subcircuit.hpp"
 #include "thread_pool.hpp"
 
-#include <cadical.hpp>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -72,16 +73,16 @@ check_constant_columns_sat(Subcircuit& sc,
     int var = (int)g->get_var() >> 1;
     int want_lit = base ? -var : var;
 
-    CaDiCaL::Solver solver;
+    std::unique_ptr<SatSolver> solver = new_sat_solver();
     for(auto& gate : sc.nodes) {
       const std::vector<int> cnf = gate->get_cnf_encoding();
       for(int lit : cnf)
-        solver.add(lit);
+        solver->add(lit);
     }
-    solver.add(want_lit);
-    solver.add(0);
+    solver->add(want_lit);
+    solver->add(0);
 
-    int res = solver.solve();
+    int res = solver->solve();
     if(res == 10) {
       msg("%s: column %d (gate %s) constant=%d, opposite reachable (SAT)",
           label.c_str(),
@@ -94,12 +95,12 @@ check_constant_columns_sat(Subcircuit& sc,
       model.push_back(1);
       for(auto it = sc.inputs.rbegin(); it != sc.inputs.rend(); ++it) {
         int v = (*it)->get_var() >> 1;
-        model.push_back(solver.val(v) > 0);
+        model.push_back(solver->val(v) > 0);
       }
 
       for(auto it = sc.nodes.rbegin(); it != sc.nodes.rend(); it++) {
         int var = (*it)->get_var() >> 1;
-        int val = solver.val(var) > 0;
+        int val = solver->val(var) > 0;
         model.push_back(val);
       }
 
@@ -336,6 +337,7 @@ linear_polies_from_truth_table(Subcircuit& sc,
     msg("Starting linear algebra for matrix of size %d x %d", mat->r, mat->c);
 
   std::vector<entry_vec> entries(PRIMES.size());
+  TaskErrors task_errors;
   for(size_t i = 0; i < PRIMES.size(); i++) {
 
     int32_t p = PRIMES[i];
@@ -356,11 +358,12 @@ linear_polies_from_truth_table(Subcircuit& sc,
       nmod_mat_clear(mat_p);
       nmod_mat_clear(ker_p);
     };
-    pool->detach_task(task);
+    pool->detach_task(task_errors.wrap(task));
   }
   pool->wait();
 
   nmod_mat_clear(mat);
+  task_errors.rethrow_if_any();
 
 
 

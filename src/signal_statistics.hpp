@@ -18,16 +18,17 @@
 #include <vector>
 
 #include <iostream>
+#include <string>
 /*------------------------------------------------------------------------*/
-// / Level of output verbosity, ranges from 0 to 4
-extern int verbose;
-extern bool booth;
-
 #define LOGDBG(fmt, ...) \
   if(verbose >= 4)       \
   msg(fmt, __VA_ARGS__)
 
 namespace talisman {
+
+// / Level of output verbosity, ranges from 0 to 4
+extern int verbose;
+extern bool booth;
 
 extern double abc_time;
 extern double extract_sc_time;
@@ -77,8 +78,16 @@ reset_all_signal_handlers();
 
 /*------------------------------------------------------------------------*/
 
+// Thrown by die(). Deliberately not derived from std::exception so that
+// generic `catch(const std::exception&)` handlers do not swallow it.
+struct Error {
+  int code;
+  std::string message;
+};
+
 /**
-    Prints an error message to stderr and exits the program
+    Prints an error message to stderr and throws Error, which aborts the
+    current run
 
     @param char* fmt message
     @param int error_code
@@ -118,6 +127,12 @@ process_time();
 */
 void
 print_statistics();
+
+/**
+    Resets all statistics counters and the start time
+*/
+void
+reset_statistics();
 
 }// namespace talisman
 

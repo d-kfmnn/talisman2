@@ -23,6 +23,10 @@ namespace talisman {
 void
 seed_randomness();
 
+// Restores the random generator to its initial (default-seeded) state
+void
+reset_randomness();
+
 struct Subcircuit {
   std::vector<Gate*> nodes;
   std::vector<Gate*> inputs;

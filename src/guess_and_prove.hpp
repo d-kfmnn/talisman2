@@ -19,6 +19,7 @@ namespace talisman {
 
 void aggregate_thread_times(int32_t prime);
 void print_individual_thread_times();
+void reset_individual_thread_times();
 
 bool guess_and_prove(LinPolynomial& poly,int sc_depth_init);
 bool

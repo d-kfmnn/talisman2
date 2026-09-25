@@ -1075,6 +1075,7 @@ clear_detection_cache() {
   g_cache.valid = false;
   g_cache.kcover_pool.clear();
   g_cache.kcover_pool.shrink_to_fit();
+  g_view = AigView();
 }
 
 /*------------------------------------------------------------------------*/

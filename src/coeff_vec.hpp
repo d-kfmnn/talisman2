@@ -25,6 +25,7 @@ class CoeffVec {
   std::vector<int32_t> entries;
 
   static void set_moduli() {
+    moduli.clear();
     for(size_t i = 0; i < PRIMES.size(); i++) {
       nmod_t mod;
       nmod_init(&mod, PRIMES[i]);

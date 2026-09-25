@@ -9,7 +9,6 @@
 
 #include "guess_and_prove.hpp"
 
-#include <cadical.hpp>
 #include <iostream>
 #include <queue>
 #include <unordered_set>
@@ -22,6 +21,8 @@
 #include "linpoly_cache.hpp"
 #include "linpolynomial.hpp"
 #include "polynomial.hpp"
+#include "run_control.hpp"
+#include "sat_backend.hpp"
 #include "subcircuit.hpp"
 #include "thread_pool.hpp"
 
@@ -129,6 +130,12 @@ void print_individual_thread_times() {
 }
 
 /*-------------------------------------------------------------------------*/
+void reset_individual_thread_times() {
+  std::lock_guard<std::mutex> lock(thread_timing_mutex);
+  thread_timing_map.clear();
+}
+
+/*-------------------------------------------------------------------------*/
 
 LinPolynomial
 gen_output_poly(Gate* g) {
@@ -202,15 +209,17 @@ prove_and_repair_guesses(Subcircuit& sc,
     root = guesses[0].get_leading_term().first;
 
   while(wrong) {
+    check_terminate();
     repair_samples.clear();
 
     auto prove_start = std::chrono::high_resolution_clock::now();
 
-    CaDiCaL::Solver* solver = new CaDiCaL::Solver;
-    int32_t fresh_var = encode_subcircuit(sc, solver);
+    std::unique_ptr<SatSolver> solver = new_sat_solver();
+    int32_t fresh_var = encode_subcircuit(sc, solver.get());
     wrong = false;
 
     for(auto& g : guesses) {
+      check_terminate();
       Gate* lm = g.get_leading_term().first;
       // don't prove guess if we already have correct poly
       if(already_proven.contains(lm) or lm->get_gatepoly())
@@ -228,7 +237,7 @@ prove_and_repair_guesses(Subcircuit& sc,
       num_proves++;
 
       bool guess_is_wrong
-        = prove_guess(sc, g, solver, repair_samples, prime, fresh_var);
+        = prove_guess(sc, g, solver.get(), repair_samples, prime, fresh_var);
       wrong = wrong or guess_is_wrong;
 
       if(not guess_is_wrong) {
@@ -239,7 +248,7 @@ prove_and_repair_guesses(Subcircuit& sc,
       if(repair_samples.size() >= 200)
         break;
     }
-    delete solver;
+    solver.reset();
     auto prove_end = std::chrono::high_resolution_clock::now();
     local_prove_time
       += std::chrono::duration<double>(prove_end - prove_start).count();
@@ -452,6 +461,7 @@ get_guesses_and_prove(Gate* leading,
     msg("Starting linear algebra for matrix of size %d x %d", mat->r, mat->c);
 
   std::vector<std::vector<LinPolynomial>> modular_guesses(PRIMES.size());
+  TaskErrors task_errors;
   for(size_t i = 0; i < PRIMES.size(); i++) {
 
     auto p = PRIMES[i];
@@ -477,9 +487,14 @@ get_guesses_and_prove(Gate* leading,
       local_guess_time
         += std::chrono::duration<double>(guess_end - guess_start).count();
 
-      if(candidate)
-        prove_and_repair_guesses(sc, mat_p, modular_guesses[i]);
-      else
+      if(candidate) {
+        try {
+          prove_and_repair_guesses(sc, mat_p, modular_guesses[i]);
+        } catch(...) {// interrupted or error: do not leak the matrix
+          nmod_mat_clear(mat_p);
+          throw;
+        }
+      } else
         modular_guesses[i].clear();
 
       nmod_mat_clear(mat_p);
@@ -487,9 +502,15 @@ get_guesses_and_prove(Gate* leading,
       // Aggregate thread-local times to global atomics
       aggregate_thread_times(p);
     };
-    pool->detach_task(task);
+    pool->detach_task(task_errors.wrap(task));
   }
   pool->wait();
+  try {
+    task_errors.rethrow_if_any();
+  } catch(...) {
+    nmod_mat_clear(mat);
+    throw;
+  }
 
   // if any of entries is empty, return false
   if(std::any_of(modular_guesses.begin(), modular_guesses.end(), [](auto& v) {
@@ -674,6 +695,7 @@ try_nonlinear_rewriting(LinPolynomial& tmp) {
   // Keep reducing by gate polynomials until leading gate is an input or
   // polynomial is zero
   while(!poly_tmp.is_zero()) {
+    check_terminate();
 
     if(poly_tmp.check_leading_coeff())
       continue;
@@ -840,6 +862,7 @@ guess_and_prove(LinPolynomial& poly, int sc_depth_init) {
   }
 
   while(tmp.get_size() > 0) {
+    check_terminate();
     tmp.multimod = true;
 
     // Check if leading coeff is multiple 

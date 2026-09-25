@@ -50,7 +50,8 @@ void init_aig_parsing();
 /*------------------------------------------------------------------------*/
 
 /**
-    Resets the 'aiger* model', which is local to aig.cpp
+    Resets the 'aiger* model', which is local to aig.cpp, and the AIG
+    dimensions (M, NN, MM, a0, ..., binc)
 */
 void reset_aig_parsing();
 /*------------------------------------------------------------------------*/

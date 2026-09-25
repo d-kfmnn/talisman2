@@ -55,8 +55,8 @@ bool get_kcover_nodes(std::vector<int>& reverse_fsa_nodes,
                        std::vector<int>& boundary_nodes);
 
 /**
-    Drops the adder-pair cache populated by detect_ha_fa_xor(). Call once
-    the results of get_kcover_nodes() are no longer needed.
+    Drops the adder-pair cache populated by detect_ha_fa_xor() and the AIG
+    view. Call once the results of get_kcover_nodes() are no longer needed.
 */
 void clear_detection_cache();
 

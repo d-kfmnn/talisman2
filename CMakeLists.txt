@@ -13,6 +13,14 @@ set(CADICAL_INCLUDE_DIR "" CACHE PATH "Path to CaDiCaL include directory")
 # Sanitizer option
 option(SANITIZE "Enable AddressSanitizer and UBSan" OFF)
 
+# Tests are only built by default if TalisMan is not embedded as a subproject
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(TALISMAN_TOP_LEVEL ON)
+else()
+  set(TALISMAN_TOP_LEVEL OFF)
+endif()
+option(TALISMAN_BUILD_TESTS "Build the library API tests" ${TALISMAN_TOP_LEVEL})
+
 # Compile flags
 set(COMMON_FLAGS -Wall -Wextra -O3 -DNDEBUG -DHAVEGETRUSAGE -DHAVEUNLOCKEDIO)
 if(SANITIZE)
@@ -23,8 +31,9 @@ add_compile_options(${COMMON_FLAGS})
 # Source files
 file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp)
 
-# Remove testers from main target
+# Remove testers and the command line front end from the library
 list(REMOVE_ITEM SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/cadical_tester.cpp")
+list(REMOVE_ITEM SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
 # Compile aiger.c as an object
 add_library(aiger_obj OBJECT includes/aiger/aiger.c)
@@ -37,8 +46,18 @@ elseif(MSVC)
   target_compile_options(aiger_obj PRIVATE /w)
 endif()
 
+# Library with everything but the command line front end, so that TalisMan
+# can be embedded into other applications (public header: include/talisman/)
+add_library(libtalisman STATIC ${SRC_FILES} $<TARGET_OBJECTS:aiger_obj>)
+set_target_properties(libtalisman PROPERTIES OUTPUT_NAME talisman)
+target_include_directories(libtalisman
+  PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 # Executable
-add_executable(talisman ${SRC_FILES} $<TARGET_OBJECTS:aiger_obj>)
+add_executable(talisman src/main.cpp)
+target_include_directories(talisman PRIVATE src)
+target_link_libraries(talisman PRIVATE libtalisman)
 
 # ---- Find GMP and GMPXX manually ----
 find_library(GMP_LIBRARY NAMES gmp PATHS ${CMAKE_LIBRARY_PATH})
@@ -56,12 +75,20 @@ if(NOT GMPXX_LIBRARY OR NOT GMPXX_INCLUDE_DIR)
 endif()
 message(STATUS "GMPXX library found at: ${GMPXX_LIBRARY}")
 
-# ---- FLINT: force user-provided paths (no find_package) ----
+# ---- FLINT: user-provided paths, otherwise searched in the default locations ----
 set(FLINT_INCLUDE_DIR "" CACHE PATH "Path to FLINT include directory (parent include dir, contains flint/)")
 set(FLINT_LIBRARY "" CACHE FILEPATH "Path to FLINT library file (libflint.so or libflint.a)")
 
+if(NOT FLINT_INCLUDE_DIR)
+  find_path(FLINT_INCLUDE_DIR_FOUND NAMES flint/nmod.h)
+  set(FLINT_INCLUDE_DIR "${FLINT_INCLUDE_DIR_FOUND}")
+endif()
+if(NOT FLINT_LIBRARY)
+  find_library(FLINT_LIBRARY_FOUND NAMES flint)
+  set(FLINT_LIBRARY "${FLINT_LIBRARY_FOUND}")
+endif()
 if(NOT FLINT_INCLUDE_DIR OR NOT FLINT_LIBRARY)
-  message(FATAL_ERROR "Provide -DFLINT_INCLUDE_DIR=/path/to/include and -DFLINT_LIBRARY=/path/to/libflint.so (or .a)")
+  message(FATAL_ERROR "FLINT not found. Provide -DFLINT_INCLUDE_DIR=/path/to/include and -DFLINT_LIBRARY=/path/to/libflint.so (or .a)")
 endif()
 
 # Validate FLINT include dir: must contain flint/nmod.h
@@ -92,7 +119,7 @@ set_target_properties(Flint::Flint PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${FLINT_INCLUDE_DIRS}"
 )
 
-message(STATUS "Forcing user-provided FLINT")
+message(STATUS "Using FLINT")
 message(STATUS "  FLINT_INCLUDE_DIR  = ${FLINT_INCLUDE_DIR}")
 message(STATUS "  FLINT_INCLUDE_DIRS = ${FLINT_INCLUDE_DIRS}")
 message(STATUS "  FLINT_LIBRARY      = ${FLINT_LIBRARY}")
@@ -122,18 +149,18 @@ message(STATUS "cadical include dir found at: ${CADICAL_INCLUDE_DIR}")
 
 # Candidate (half-/full-adder, K-cover) detection is implemented in-tree in
 # src/candidates.cpp -- no external EDA library dependency needed.
-target_link_libraries(${PROJECT_NAME} PRIVATE
+target_link_libraries(libtalisman PRIVATE
   pthread
   m
 )
 
 # ---- Include directories ----
 # GMP includes
-target_include_directories(talisman PRIVATE ${GMP_INCLUDE_DIR} ${GMPXX_INCLUDE_DIR})
+target_include_directories(libtalisman PRIVATE ${GMP_INCLUDE_DIR} ${GMPXX_INCLUDE_DIR})
 # FLINT includes (support both include styles)
-target_include_directories(talisman PRIVATE ${FLINT_INCLUDE_DIRS})
+target_include_directories(libtalisman PRIVATE ${FLINT_INCLUDE_DIRS})
 # CaDiCaL includes
-target_include_directories(talisman PRIVATE ${CADICAL_INCLUDE_DIR})
+target_include_directories(libtalisman PRIVATE ${CADICAL_INCLUDE_DIR})
 
 # Add pblib subdirectory
 add_subdirectory(includes/pblib)
@@ -143,15 +170,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 elseif(MSVC)
   target_compile_options(pblib PRIVATE /w)
 endif()
-target_include_directories(talisman PRIVATE includes/pblib)
+target_include_directories(libtalisman PRIVATE includes/pblib)
 
 # cmsgen includes
 find_package(cmsgen REQUIRED)
-target_include_directories(talisman PRIVATE ${CMSGEN_INCLUDE_DIRS})
-target_link_libraries(talisman PRIVATE cmsgen)
+target_include_directories(libtalisman PRIVATE ${CMSGEN_INCLUDE_DIRS})
+target_link_libraries(libtalisman PRIVATE cmsgen)
 
 # ---- Link Libraries ----
-target_link_libraries(talisman
+target_link_libraries(libtalisman
   PRIVATE
     Flint::Flint
     ${GMPXX_LIBRARY}
@@ -160,7 +187,17 @@ target_link_libraries(talisman
     PBlib::pblib
 )
 
-# Apply sanitizer link flags
+# Apply sanitizer link flags (to the library users as well)
 if(SANITIZE)
-  target_link_options(talisman PRIVATE -fsanitize=address -fsanitize=undefined)
+  target_link_options(libtalisman PUBLIC -fsanitize=address -fsanitize=undefined)
+endif()
+
+# ---- Tests ----
+if(TALISMAN_BUILD_TESTS)
+  enable_testing()
+  add_executable(talisman_api_test test/api_test.cpp)
+  target_link_libraries(talisman_api_test PRIVATE libtalisman)
+  target_compile_definitions(talisman_api_test PRIVATE
+    TALISMAN_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+  add_test(NAME talisman_api_test COMMAND talisman_api_test)
 endif()

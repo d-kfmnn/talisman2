@@ -1,6 +1,6 @@
 /*------------------------------------------------------------------------*/
 /*! \file talisman.cpp
-    \brief main file of our tool TalisMan
+    \brief library entry point of TalisMan, see include/talisman/talisman.hpp
 
   Part of TalisMan
   Copyright(C) 2025 TalisMan-Developers
@@ -8,47 +8,10 @@
 /*------------------------------------------------------------------------*/
 #define VERSION "2.0"
 /*------------------------------------------------------------------------*/
-// / Manual of TalisMan, will be printed with command line '-h'
-static const char* USAGE
-  = "\n"
-    "Usage: talisman <input-file> <spec-mode> [options]\n"
-    "\n"
-    "Positional arguments:\n"
-    "  <input-file>            File containing the AIG graph\n"
-    "  <spec_file>             Custom spec file (use when not using built-in "
-    "specs)\n"
-    "\n"
-    "Specification modes (pick one):\n"
-    "  -miter-spec             Use the miter specification\n"
-    "  -mult-spec              Use the multiplier specification\n"
-    "  -assert-spec            Use the assertion specification\n"
-    "\n"
-    "General options:\n"
-    "  -h, --help              Show this help message and exit\n"
-    "  -v <int>                Verbosity level (0..4)\n"
-    "  --custom-linalg <0|1>   Use custom routines for linear algebra (default "
-    "1)\n"
-    "  -primes <0|1>           Primes to use (0: structured, 1: random)\n"
-    "  --reduction <0|1|2>     Reduction strategy (0:hybrid, 1:linear, "
-    "2:nonlinear) (default 0)\n"
-    "  --sc-depth <int>         Subcircuit depth (levels, default 2)\n"
-    "  --trust-abc             Trust linear polynomial cache from ABC (skip "
-    "SAT "
-    "checks)\n"
-    "  --uniform-sampling <0|1> Disable uniform sampling (default 1)\n"
-    "\n"
-    "Examples:\n"
-    "  talisman input.aig -mult-spec\n"
-    "  talisman input.aig spec.txt\n"
-    "  talisman input.aig -mult-spec --trust-abc\n"
-    "";
-/*------------------------------------------------------------------------*/
-#include <algorithm>// for strcmp
-#include <cctype>   // for std::isdigit
-#include <cstdlib>  // for std::atoi
-#include <cstring>  // for strcmp
-#include <ctime>
-#include <iomanip>
+#include <mutex>
+#include <optional>
+
+#include "talisman/talisman.hpp"
 
 #include "candidates.hpp"
 #include "coeff_vec.hpp"
@@ -58,6 +21,8 @@ static const char* USAGE
 #include "linpoly_cache.hpp"
 #include "linpolynomial.hpp"
 #include "parser.hpp"
+#include "run_control.hpp"
+#include "sat_backend.hpp"
 #include "signal_statistics.hpp"
 #include "specpoly.hpp"
 #include "subcircuit.hpp"
@@ -66,27 +31,8 @@ static const char* USAGE
 using namespace talisman;
 
 /*------------------------------------------------------------------------*/
-// / Name of the input file
-const char* input_file = nullptr;
-const char* spec_file = nullptr;
-// If true, trust ABC-produced linear polynomial cache and skip SAT checks
-bool trust_abc = false;
-/*------------------------------------------------------------------------*/
-// ERROR CODES:
 
-static int err_no_file = 100;     // no input file given
-static int err_spec_sel = 101;    // mode has already been selected/not selected
-static int err_ukwn_option = 102; // unknown option given
-static int err_no_spec_file = 103;// no spec file provided
-static int err_too_many_arguments = 104;// too many arguments given
-
-/*------------------------------------------------------------------------*/
-
-enum class SpecType { None, Miter, Mult, Assert, File };
-SpecType spec_type = SpecType::None;
-
-int subcircuit_depth = 2;// Default depth for subcircuit traversal
-int prime = 101;
+static const int prime = 101;
 
 // Define linpolynomial pruning flag (default enabled)
 namespace talisman {
@@ -103,149 +49,48 @@ std::vector<int32_t> PRIMES;
 // unit, and BS::thread_pool treats a count of 0 as "use hardware_concurrency()".
 // Sizing the pool from PRIMES here therefore silently gave it as many threads as
 // the machine has cores, which made the sampling in weighted_sampling() (and thus
-// the whole computation) machine-dependent. The real pool is created in main()
+// the whole computation) machine-dependent. The real pool is created in verify()
 // once PRIMES is filled -- do not size it from PRIMES here.
 thread_pool pool = std::make_unique<BS::thread_pool<BS::none>>(1);
 }
 
 /*------------------------------------------------------------------------*/
+// All state of a run lives in globals, hence runs are serialized.
+static std::mutex run_mutex;
+
+/*------------------------------------------------------------------------*/
+static void
+apply_options(const Options& opts) {
+  verbose = opts.verbose;
+  mult_spec = (opts.spec == SpecMode::Mult);
+  miter_spec = (opts.spec == SpecMode::Miter);
+  talisman::primes = opts.primes;
+  talisman::reduction_strategy = opts.reduction;
+  talisman::custom_linalg = opts.custom_linalg;
+  talisman::uniform_sampling = opts.uniform_sampling;
+}
+
+/*------------------------------------------------------------------------*/
+// Frees everything a run allocated and restores the initial global state.
+static void
+reset_run_state() {
+  talisman::pool = std::make_unique<BS::thread_pool<BS::none>>(1);
+  linpoly_cache_clear();
+  clear_detection_cache();
+  reset_gates();
+  reset_aig_parsing();
+  talisman::PRIMES.clear();
+  moduli.clear();
+  two_pow_NN_imgs.clear();
+  reset_randomness();
+  reset_statistics();
+}
+
+/*------------------------------------------------------------------------*/
+// The actual verification, returns true iff guess and prove succeeded.
 static bool
-is_number(const std::string& s) {
-  return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-}
-/*------------------------------------------------------------------------*/
-
-// Parses a non-negative integer from argv
-static int
-parse_non_negative_int(const char* flag, const char* value_str) {
-  if(!is_number(value_str))
-    die(123, "%s needs to be followed by a non-negative integer", flag);
-  int value = std::stoi(value_str);
-  if(value < 0)
-    die(123, "%s needs to be followed by a non-negative integer", flag);
-  return value;
-}
-
-/*------------------------------------------------------------------------*/
-static void
-parse_arguments(int argc, char** argv) {
-  for(int i = 1; i < argc; i++) {
-    std::string arg = argv[i];
-
-    if(arg == "-h" || arg == "--help") {
-      fputs(USAGE, stdout);
-      fflush(stdout);
-      exit(0);
-    } else if(arg == "-v" && i + 1 < argc) {
-      verbose = parse_non_negative_int("-v", argv[++i]);
-    } else if(arg == "--sc-depth" && i + 1 < argc) {
-      subcircuit_depth = parse_non_negative_int("--sc-depth", argv[++i]);
-    } else if(arg == "--primes" && i + 1 < argc) {
-      primes = parse_non_negative_int("--primes", argv[++i]);
-    } else if(arg == "-miter-spec") {
-      if(spec_type != SpecType::None)
-        die(err_spec_sel, "only one specification is allowed (try '-h')");
-      spec_type = SpecType::Miter;
-    } else if(arg == "-mult-spec") {
-      if(spec_type != SpecType::None)
-        die(err_spec_sel, "only one specification is allowed (try '-h')");
-      spec_type = SpecType::Mult;
-    } else if(arg == "-assert-spec") {
-      if(spec_type != SpecType::None)
-        die(err_spec_sel, "only one specification is allowed (try '-h')");
-      spec_type = SpecType::Assert;
-    } else if(arg == "--custom-linalg") {
-      if(i + 1 < argc && is_number(argv[i + 1])) {
-        int v = parse_non_negative_int("--custom-linalg", argv[++i]);
-        talisman::custom_linalg = (v != 0);
-      }
-    } else if(arg == "--reduction") {
-      if(i + 1 < argc && is_number(argv[i + 1])) {
-        int v = parse_non_negative_int("--reduction", argv[++i]);
-        talisman::reduction_strategy = v;
-      }
-    } else if(arg == "--trust-abc") {
-      trust_abc = true;
-    } else if(arg == "--uniform-sampling") {
-      if(i + 1 < argc && is_number(argv[i + 1])) {
-        int v = parse_non_negative_int("--uniform-sampling", argv[++i]);
-        talisman::uniform_sampling = (v != 0);
-      }
-    } else if(arg.size() > 0 && arg[0] == '-') {
-      die(err_ukwn_option, "unknown option '%s' (try '-h')", argv[i]);
-    } else if(!input_file) {
-      input_file = argv[i];
-    } else if(spec_type == SpecType::None && !spec_file) {
-      spec_file = argv[i];
-      spec_type = SpecType::File;
-    } else {
-      die(
-        err_too_many_arguments, "too many arguments '%s' (try '-h')", argv[i]);
-    }
-  }
-
-  if(!input_file)
-    die(err_no_file, "no input file given (try '-h')");
-  if(spec_type == SpecType::File && !spec_file)
-    die(err_no_spec_file, "no spec file provided (try '-h')");
-
-  mult_spec = (spec_type == SpecType::Mult);
-  miter_spec = (spec_type == SpecType::Miter);
-}
-/*------------------------------------------------------------------------*/
-static void
-print_settings() {
-  print_hline();
-  msg("SETTINGS");
-  msg("");
-
-  switch(spec_type) {
-    case SpecType::Miter:
-      msg("specification: miter");
-      break;
-    case SpecType::Mult:
-      msg("specification: unsigned multiplier");
-      break;
-    case SpecType::Assert:
-      msg("specification: assertion");
-      break;
-    case SpecType::File:
-      msg("spec from file %s will be used", spec_file);
-      break;
-    default:
-      msg("specification: none");
-      break;
-  }
-
-  if(spec_type == SpecType::None) {
-    warning("No specification selected. ");
-    warning("Circuit will be processed without verification.");
-  }
-
-  // print selected subcircuit depth
-  msg("subcircuit depth: %d", subcircuit_depth);
-  print_hline();
-}
-
-/*------------------------------------------------------------------------*/
-int
-main(int argc, char** argv) {
-  msg("TalisMan Version " VERSION);
-  msg("");
-  msg("Copyright(C) 2025 Daniela Kaufmann, TU Wien");
-  msg("                  Clemens Hofstadler, JKU Linz");
-  msg("");
-
-  if(argc < 2) {
-    fputs(USAGE, stdout);
-    fflush(stdout);
-    return 0;
-  }
-
-  parse_arguments(argc, argv);
-
-  SignalGuard sg;
-  parse_aig(input_file);
+verify(const Options& opts) {
+  parse_aig(opts.input_file.c_str());
 
   init_gates(mult_spec ? NN * NN / 4 : 0);
   print_hline();
@@ -328,10 +173,10 @@ main(int argc, char** argv) {
       //   mark_fahaxor(xor_list);
       // }
 
-      if(trust_abc) {
+      if(opts.trust_abc) {
         trust_linpoly_cache();
       } else {
-        check_linpoly_cache(subcircuit_depth, prime);
+        check_linpoly_cache(opts.sc_depth, prime);
       }
     } else {
       warning("HA/FA/XOR detection failed. Proceeding without it.");
@@ -368,7 +213,7 @@ main(int argc, char** argv) {
 
   LinPolynomial spec_poly = gen_mult_spec_poly();
 
-  bool result = guess_and_prove(spec_poly, subcircuit_depth);
+  bool result = guess_and_prove(spec_poly, opts.sc_depth);
 
   if(!result) {
     msg("Guess and Prove failed.");
@@ -376,10 +221,53 @@ main(int argc, char** argv) {
     msg("Guess and Prove succeeded.");
   }
 
-  // linpoly_cache_clear();
-  // reset_aig_parsing();
-  // reset_all_signal_handlers();
-
   print_statistics();
-  return result ? 0 : 1;
+  return result;
 }
+
+/*------------------------------------------------------------------------*/
+namespace talisman {
+
+const char*
+version() {
+  return VERSION;
+}
+
+/*------------------------------------------------------------------------*/
+Result
+run(const Options& opts, const Hooks& hooks) {
+  std::lock_guard<std::mutex> lock(run_mutex);
+
+  reset_run_state();
+  apply_options(opts);
+  set_sat_solver_factory(hooks.sat_solver_factory);
+  set_terminate_callback(hooks.terminate);
+
+  std::optional<SignalGuard> sg;
+  if(hooks.install_signal_handlers)
+    sg.emplace();
+
+  Result res;
+  try {
+    res.status = verify(opts) ? Status::Verified : Status::NotVerified;
+  } catch(const Interrupted&) {
+    msg("interrupted");
+    res.status = Status::Interrupted;
+  } catch(const Error& e) {
+    res.status = Status::Error;
+    res.error_code = e.code;
+    res.error_message = e.message;
+  } catch(const std::exception& e) {
+    res.status = Status::Error;
+    res.error_code = 255;
+    res.error_message = e.what();
+  }
+
+  sg.reset();
+  set_terminate_callback({});
+  set_sat_solver_factory({});
+  reset_run_state();
+  return res;
+}
+
+}// namespace talisman

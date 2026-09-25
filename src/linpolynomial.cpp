@@ -204,6 +204,7 @@ std::vector<CoeffVec> two_pow_NN_imgs;
 
 void
 init_two_pow_NN_imgs() {
+  two_pow_NN_imgs.clear();
   // 2^NN
   two_pow_NN_imgs.emplace_back(NN);
   // -2^NN

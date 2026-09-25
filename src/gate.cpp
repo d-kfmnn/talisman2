@@ -269,7 +269,7 @@ Gate::get_pb_encoding() {
 }
 
 /*------------------------------------------------------------------------*/
-Gate** gates;
+Gate** gates = nullptr;
 unsigned num_gates = 0;
 unsigned size_gates = 0;
 
@@ -1297,6 +1297,24 @@ delete_gates() {
   delete[] gates;
 }
 
+// set once decompose_all_gate_polynomials() ran
+static bool decomposed = false;
+
+/*------------------------------------------------------------------------*/
+void
+reset_gates() {
+  if(gates)
+    delete_gates();
+  gates = nullptr;
+  num_gates = 0;
+  size_gates = 0;
+  gates_by_dist.clear();
+  add_var = 0;
+  max_dist = 0;
+  fsa_size = 0;
+  decomposed = false;
+}
+
 void
 reassign_levels_by_cone_order() {
   // find max cone id
@@ -1682,7 +1700,6 @@ substitute_gate(Gate* n,
 
 void
 decompose_all_gate_polynomials(Gate* border) {
-  static bool decomposed = false;
   if(decomposed)
     return;
   decomposed = true;

@@ -63,14 +63,16 @@ Build cmsgen (included in includes/cmsgen):
       -DBUILD_SHARED_LIBS=OFF -DMANPAGE=OFF -DNOZLIB=ON
     cmake --build build/cmsgen --target cmsgen CopyPublicHeaders -j
 
-Configure (adapt the paths to CaDiCaL and FLINT):
+Configure (adapt the paths to CaDiCaL):
 
     cmake -S . -B build \
       -DCADICAL_INCLUDE_DIR=/path/to/cadical/src \
       -DCADICAL_LIBRARY_DIR=/path/to/cadical/build \
-      -DFLINT_INCLUDE_DIR=/usr/include \
-      -DFLINT_LIBRARY=/usr/lib/x86_64-linux-gnu/libflint.so \
       -Dcmsgen_DIR=$PWD/build/cmsgen
+
+FLINT is searched in the default locations. If it is installed
+elsewhere, add -DFLINT_INCLUDE_DIR=/path/to/include (the directory
+containing flint/) and -DFLINT_LIBRARY=/path/to/libflint.so.
 
 Build:
 
@@ -83,6 +85,7 @@ The executable will be located at:
 Test:
 
     ./build/talisman examples/abc6.aig -mult-spec
+    cd build && ctest && cd ..   # library API test
 
 
 
@@ -165,5 +168,18 @@ Notes
 - Adders are detected by TalisMan itself, ABC is no longer needed.
 - If unexpected behaviour occurs, delete the build directory and rebuild.
 
+------------------------------------------------------------
+Library
+------------------------------------------------------------
+
+Besides the executable, the build produces the static library
+build/libtalisman.a (CMake target libtalisman), which is used, e.g.,
+by the TalisMan application engine of the distributed SAT solving
+platform Mallob. Its interface is include/talisman/talisman.hpp:
+talisman::run(options, hooks) verifies one AIG, the hooks select the
+SAT backend (default: CaDiCaL) and a terminate callback. All state is
+reset after each run, errors are returned instead of exiting the process.
+The library API test is test/api_test.cpp (repeated runs, custom SAT
+backend, interruption).
 
 

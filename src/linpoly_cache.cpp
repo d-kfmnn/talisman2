@@ -4,7 +4,6 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
-#include <cadical.hpp>
 
 
 namespace talisman {

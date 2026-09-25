@@ -409,6 +409,10 @@ static inline Gate* getGateByNodeId(int node_id) {
 void
 delete_gates();
 
+// Delete all gates and reset the global gate state for a new run
+void
+reset_gates();
+
 void decompose_all_gate_polynomials(Gate * border);
 
 void reassign_levels_by_cone_order();

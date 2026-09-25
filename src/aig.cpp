@@ -18,7 +18,7 @@ unsigned b0, bl, binc;
 /*------------------------------------------------------------------------*/
 // Local Variables
 
-aiger *model; // /< aiger* object, used for storing the given AIG graph
+aiger *model = nullptr; // /< aiger* object, used for storing the given AIG graph
 /*------------------------------------------------------------------------*/
 
 /*------------------------------------------------------------------------*/
@@ -29,7 +29,12 @@ void init_aig_parsing()
 /*------------------------------------------------------------------------*/
 void reset_aig_parsing()
 {
-  aiger_reset(model);
+  if (model)
+    aiger_reset(model);
+  model = nullptr;
+  M = NN = MM = 0;
+  a0 = al = ainc = 0;
+  b0 = bl = binc = 0;
 }
 /*------------------------------------------------------------------------*/
 const char *aiger_open_and_read_to_model(const char *input_name)

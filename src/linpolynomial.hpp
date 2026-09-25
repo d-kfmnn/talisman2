@@ -40,6 +40,9 @@ struct GateLevelComparator {
   }
 };
 
+// images of +-k*2^NN (k = 1..1024) modulo all PRIMES
+extern std::vector<CoeffVec> two_pow_NN_imgs;
+
 void
 init_two_pow_NN_imgs();
 

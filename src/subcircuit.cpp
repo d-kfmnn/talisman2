@@ -9,6 +9,7 @@
 #include "subcircuit.hpp"
 #include "linear_algebra.hpp"
 #include "prove.hpp"
+#include "run_control.hpp"
 #include "signal_statistics.hpp"
 #include "thread_pool.hpp"
 
@@ -23,7 +24,7 @@
 
 using namespace talisman;
 
-unsigned int seed = 42;
+static unsigned int seed = 42;
 
 namespace talisman {
 
@@ -43,6 +44,12 @@ static std::uniform_int_distribution<uint64_t> dis;
 void
 seed_randomness() {
   gen.seed(seed);
+}
+
+void
+reset_randomness() {
+  gen.seed(std::mt19937_64::default_seed);
+  dis.reset();
 }
 
 // Sample a random 64-bit unsigned integer using Mersenne Twister
@@ -697,6 +704,7 @@ weighted_sampling(Subcircuit& sc, nmod_mat_t mat, int sample_size) {
   int block_size = mat->r / nr_blocks;
   int remainder = mat->r % nr_blocks;
   int start_row = 0;
+  TaskErrors task_errors;
 
   for(int t = 0; t < nr_blocks; t++) {
     int rows_for_thread = block_size + (t < remainder ? 1 : 0);
@@ -731,10 +739,11 @@ weighted_sampling(Subcircuit& sc, nmod_mat_t mat, int sample_size) {
         }
       }
     };
-    pool->detach_task(task);
+    pool->detach_task(task_errors.wrap(task));
     start_row = end_row;
   }
   pool->wait();
+  task_errors.rethrow_if_any();
 }
 /*------------------------------------------------------------------------*/
 // Samples and evaluates a subcircuit using both uniform matrix and random

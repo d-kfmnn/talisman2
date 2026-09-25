@@ -12,11 +12,11 @@
 
 #include <atomic>
 #include <bit>
-#include <cadical.hpp>
 #include <unordered_map>
 
 #include "linpoly_cache.hpp"
 #include "pblib/pb2cnf.h"
+#include "run_control.hpp"
 #include "thread_pool.hpp"
 #include <iostream>
 
@@ -26,7 +26,7 @@ namespace talisman {
 
 thread_local std::vector<int> sat_model;
 static std::vector<int>
-get_model(CaDiCaL::Solver* solver, Subcircuit& sc) {
+get_model(SatSolver* solver, Subcircuit& sc) {
   sat_model.clear();
   sat_model.reserve(get_size(sc) + 1);
 
@@ -50,7 +50,7 @@ get_model(CaDiCaL::Solver* solver, Subcircuit& sc) {
 
 //------------------------------------------------------------------------
 static int64_t
-evaluate(CaDiCaL::Solver* solver, LinPolynomial& poly) {
+evaluate(SatSolver* solver, LinPolynomial& poly) {
   int64_t result = 0;
   for(const auto& term : poly.get_terms()) {
     Gate* gate = term.first;
@@ -133,7 +133,7 @@ poly_encoding(std::vector<std::vector<int32_t>>& poly_clauses,
 }
 //------------------------------------------------------------------------
 int32_t
-encode_subcircuit(Subcircuit& sc, CaDiCaL::Solver* solver) {
+encode_subcircuit(Subcircuit& sc, SatSolver* solver) {
   //------------------------------------------------------------------------
   // Encode subcircuit CNF into solver
   //------------------------------------------------------------------------
@@ -153,6 +153,18 @@ encode_subcircuit(Subcircuit& sc, CaDiCaL::Solver* solver) {
   return fresh_var;
 }
 //------------------------------------------------------------------------
+// Only SAT/UNSAT answers may be used: treating an unknown result as UNSAT
+// would accept an unproven guess.
+static int
+solve_or_abort(SatSolver* solver) {
+  int result = solver->solve();
+  if(result != 10 && result != 20) {
+    check_terminate();
+    die(8, "SAT solver returned unknown result %d", result);
+  }
+  return result;
+}
+//------------------------------------------------------------------------
 thread_local std::vector<std::vector<int32_t>> poly_clauses;
 thread_local std::vector<int64_t> weights;
 thread_local std::vector<int32_t> literals;
@@ -160,7 +172,7 @@ thread_local std::vector<int32_t> literals;
 bool
 prove_guess_SAT(Subcircuit& sc,
                 LinPolynomial& poly,
-                CaDiCaL::Solver* solver,
+                SatSolver* solver,
                 std::vector<std::vector<int>>& repair_samples,
                 int prime,
                 int32_t& fresh_var,
@@ -190,7 +202,7 @@ prove_guess_SAT(Subcircuit& sc,
   // Solve
   //------------------------------------------------------------------------
   solver->assume(-selector_var);
-  int result = solver->solve();
+  int result = solve_or_abort(solver);
 
   bool res = false;
   while(result == 10) {
@@ -221,7 +233,7 @@ prove_guess_SAT(Subcircuit& sc,
       }
       // time the subsequent SAT solve
       solver->assume(-selector_var);
-      result = solver->solve();
+      result = solve_or_abort(solver);
     }
   }
 
@@ -235,7 +247,7 @@ prove_guess_SAT(Subcircuit& sc,
 bool
 prove_guess(Subcircuit& sc,
             LinPolynomial& guess,
-            CaDiCaL::Solver* solver,
+            SatSolver* solver,
             std::vector<std::vector<int>>& repair_samples,
             int prime,
             int32_t& fresh_var,
@@ -312,6 +324,7 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
   // Atomic counters for progress
   std::atomic<int> success_count{ 0 };
   std::atomic<int> failure_count{ 0 };
+  TaskErrors task_errors;
 
   // Create a local thread pool for this operation. Sized like the global pool
   // (one worker per prime) rather than from hardware_concurrency(), which would
@@ -329,6 +342,7 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
                  sc_depth,
                  prime,
                  factors]() {
+      check_terminate();
       const LinpolyCheckTask& t = tasks[i];
       LinpolyCheckResult& r = results[i];
 
@@ -342,8 +356,8 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
       Subcircuit sc = get_subcircuit(lead, sc_depth, 1);
 
       // Create solver and encode
-      CaDiCaL::Solver* solver = new CaDiCaL::Solver;
-      int32_t fresh_var = encode_subcircuit(sc, solver);
+      std::unique_ptr<SatSolver> solver = new_sat_solver();
+      int32_t fresh_var = encode_subcircuit(sc, solver.get());
 
       // Local repair samples (not used but required by API)
       std::vector<std::vector<int>> local_repair;
@@ -352,8 +366,8 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
       LinPolynomial lp_copy = t.poly;
       abc_polies++;
       bool wrong = prove_guess(
-        sc, lp_copy, solver, local_repair, prime, fresh_var, factors);
-      delete solver;
+        sc, lp_copy, solver.get(), local_repair, prime, fresh_var, factors);
+      solver.reset();
 
       r.success = !wrong;
 
@@ -364,11 +378,12 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
       }
     };
 
-    local_pool.detach_task(task);
+    local_pool.detach_task(task_errors.wrap(task));
   }
 
   // Wait for all tasks to complete
   local_pool.wait();
+  task_errors.rethrow_if_any();
 
   // Process results: attach successful polynomials to gates
   // This must be done serially to avoid race conditions on gate modification

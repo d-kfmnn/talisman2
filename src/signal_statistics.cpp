@@ -24,18 +24,18 @@
 
 #include "guess_and_prove.hpp"
 
-// Global variable
-int verbose = 1;
-bool booth = 0;
-
 // ANSI color codes
-const char* RED = "\033[31m";
-const char* GREEN = "\033[32m";
-const char* YELLOW = "\033[33m";
-const char* RESET = "\033[0m";
+static const char* RED = "\033[31m";
+[[maybe_unused]] static const char* GREEN = "\033[32m";
+static const char* YELLOW = "\033[33m";
+static const char* RESET = "\033[0m";
 
 /*------------------------------------------------------------------------*/
 namespace talisman {
+
+// Global variable
+int verbose = 1;
+bool booth = 0;
 
 double abc_time = 0;
 double extract_sc_time = 0;
@@ -184,21 +184,23 @@ print_hline() {
 [[noreturn]]
 void
 die(int error_code, const char* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  va_list args_len;
+  va_copy(args_len, args);
+  std::string message(std::vsnprintf(nullptr, 0, fmt, args_len), '\0');
+  va_end(args_len);
+  std::vsnprintf(message.data(), message.size() + 1, fmt, args);
+  va_end(args);
+
   std::cout << RED;// Set text color to green
   const char* prefix = "[ERROR] ";
   std::fflush(stdout);
   std::cerr << "*** " << prefix << "error code " << error_code << '\n';
-  std::cerr << "*** " << prefix;
-
-  va_list args;
-  va_start(args, fmt);
-  vfprintf(stderr, fmt, args);
-  va_end(args);
-
-  std::cerr << '\n';
+  std::cerr << "*** " << prefix << message << '\n';
   std::cout << RESET << '\n';// Reset color after printing
   std::fflush(stderr);
-  std::exit(error_code);
+  throw Error{ error_code, message };
 }
 
 // ------------------------------------------------------------------
@@ -309,6 +311,31 @@ print_statistics() {
   std::cout << prefix << "=======================================================\n";
 
   std::fflush(stdout);
+}
+// ------------------------------------------------------------------
+void
+reset_statistics() {
+  abc_time = 0;
+  extract_sc_time = 0;
+  sample_time = 0;
+  guess_time = 0.0;
+  guess_noparallel_time = 0;
+  prove_time = 0.0;
+  repair_time = 0.0;
+  nonlin_time = 0;
+  simplify_time = 0;
+  lin_time = 0;
+  abc_polies = 0;
+  lin_steps = 0;
+  nonlin_steps = 0;
+  num_repair_loop = 0;
+  max_num_repair_loop = 0;
+  num_guesses = 0;
+  num_proves = 0;
+  num_correct_guesses = 0;
+  num_primes = 0;
+  reset_individual_thread_times();
+  start_time = std::chrono::steady_clock::now();
 }
 
 }// namespace talisman
