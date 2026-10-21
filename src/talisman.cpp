@@ -252,17 +252,21 @@ main(int argc, char** argv) {
 
   linpoly_cache_init();
 
-  if(primes == 0 and NN <= 128)
+  // The product of the 8 structured primes is only about 2^128.0009, so for
+  // NN = 128 the residues of 2^NN are those of a coefficient of about
+  // -2^117.4, which would then be removed as a multiple of 2^NN.
+  // Hence NN = 128 needs the 16 primes.
+  if(primes == 0 and NN < 128)
     talisman::PRIMES
       = { 65519, 65521, 65537, 65539, 65543, 65551, 65557, 65563 };
-  else if(primes == 1 and NN <= 128)
+  else if(primes == 1 and NN < 128)
     talisman::PRIMES
       = { 91373, 79601, 91583, 127837, 46639, 57719, 111497, 43103 };
-  if(primes == 0 and NN > 128)
+  if(primes == 0 and NN >= 128)
     talisman::PRIMES
       = { 65497, 65519, 65521, 65537, 65539, 65543, 65551, 65557,
           65563, 65579, 65581, 65587, 65599, 65609, 65617, 65629 };
-  else if(primes == 1 and NN > 128)
+  else if(primes == 1 and NN >= 128)
     talisman::PRIMES
       = { 76907,  120539, 91513, 45841,  46399,  96601, 72253,  42743,
           122147, 79231,  73961, 119027, 128659, 49727, 119297, 78989 };
