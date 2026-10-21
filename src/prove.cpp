@@ -313,13 +313,11 @@ check_linpoly_cache(int sc_depth, int prime, std::vector<int> factors) {
   std::atomic<int> success_count{ 0 };
   std::atomic<int> failure_count{ 0 };
 
-  // Use the global thread pool
-  size_t num_threads = std::thread::hardware_concurrency();
-  if(num_threads == 0)
-    num_threads = 4;
-
-  // Create a local thread pool for this operation
-  BS::thread_pool<BS::none> local_pool(num_threads);
+  // Create a local thread pool for this operation. Sized like the global pool
+  // (one worker per prime) rather than from hardware_concurrency(), which would
+  // stack a second core-count-sized pool on top of the global one and make the
+  // amount of parallelism machine-dependent.
+  BS::thread_pool<BS::none> local_pool(PRIMES.size());
 
   // Submit all tasks to the thread pool
   for(size_t i = 0; i < tasks.size(); ++i) {

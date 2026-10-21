@@ -22,7 +22,7 @@ static const char* USAGE
     "  -miter-spec             Use the miter specification\n"
     "  -mult-spec              Use the multiplier specification\n"
     "  -assert-spec            Use the assertion specification\n"
-    "\n"  
+    "\n"
     "General options:\n"
     "  -h, --help              Show this help message and exit\n"
     "  -v <int>                Verbosity level (0..4)\n"
@@ -32,7 +32,7 @@ static const char* USAGE
     "  --reduction <0|1|2>     Reduction strategy (0:hybrid, 1:linear, "
     "2:nonlinear) (default 0)\n"
     "  --sc-depth <int>         Subcircuit depth (levels, default 2)\n"
-    "  --no-trust-abc           Do not trust linear polynomial cache from ABC (perform "
+    "  --trust-abc             Trust linear polynomial cache from ABC (skip "
     "SAT "
     "checks)\n"
     "  --uniform-sampling <0|1> Disable uniform sampling (default 1)\n"
@@ -40,17 +40,17 @@ static const char* USAGE
     "Examples:\n"
     "  talisman input.aig -mult-spec\n"
     "  talisman input.aig spec.txt\n"
-    "  talisman input.aig -mult-spec --no-trust-abc\n"
+    "  talisman input.aig -mult-spec --trust-abc\n"
     "";
 /*------------------------------------------------------------------------*/
 #include <algorithm>// for strcmp
 #include <cctype>   // for std::isdigit
 #include <cstdlib>  // for std::atoi
-#include <cstring>  // for strcmp 
+#include <cstring>  // for strcmp
 #include <ctime>
 #include <iomanip>
 
-#include "abc_interface.hpp"
+#include "candidates.hpp"
 #include "coeff_vec.hpp"
 #include "gate.hpp"
 #include "guess_and_prove.hpp"
@@ -70,7 +70,7 @@ using namespace talisman;
 const char* input_file = nullptr;
 const char* spec_file = nullptr;
 // If true, trust ABC-produced linear polynomial cache and skip SAT checks
-bool trust_abc = true;
+bool trust_abc = false;
 /*------------------------------------------------------------------------*/
 // ERROR CODES:
 
@@ -99,7 +99,13 @@ using thread_pool = std::unique_ptr<BS::thread_pool<BS::none>>;
 
 std::vector<int32_t> PRIMES;
 
-thread_pool pool = std::make_unique<BS::thread_pool<BS::none>>(PRIMES.size());
+// NOTE: PRIMES is still empty during static initialisation of this translation
+// unit, and BS::thread_pool treats a count of 0 as "use hardware_concurrency()".
+// Sizing the pool from PRIMES here therefore silently gave it as many threads as
+// the machine has cores, which made the sampling in weighted_sampling() (and thus
+// the whole computation) machine-dependent. The real pool is created in main()
+// once PRIMES is filled -- do not size it from PRIMES here.
+thread_pool pool = std::make_unique<BS::thread_pool<BS::none>>(1);
 }
 
 /*------------------------------------------------------------------------*/
@@ -158,8 +164,8 @@ parse_arguments(int argc, char** argv) {
         int v = parse_non_negative_int("--reduction", argv[++i]);
         talisman::reduction_strategy = v;
       }
-    } else if(arg == "--no-trust-abc") {
-      trust_abc = false;
+    } else if(arg == "--trust-abc") {
+      trust_abc = true;
     } else if(arg == "--uniform-sampling") {
       if(i + 1 < argc && is_number(argv[i + 1])) {
         int v = parse_non_negative_int("--uniform-sampling", argv[++i]);
@@ -263,45 +269,45 @@ main(int argc, char** argv) {
 
   num_primes = talisman::PRIMES.size();
 
+  // Create the real worker pool now that PRIMES is populated (see the note at
+  // the definition of `pool` above).
+  talisman::pool
+    = std::make_unique<BS::thread_pool<BS::none>>(talisman::PRIMES.size());
+
   CoeffVec::set_moduli();
   init_two_pow_NN_imgs();
 
   msg("Primes: %s", talisman::primes == 0 ? "structured" : "random");
+  msg("Worker threads: %zu", talisman::pool->get_thread_count());
   msg("Reduction strategy: %s",
       talisman::reduction_strategy == 0   ? "hybrid"
       : talisman::reduction_strategy == 1 ? "linear"
                                           : "nonlinear");
-  msg("Using ABC internal detection for adders");
+  msg("Using built-in structural detection for adders");
   if(talisman::reduction_strategy < 2) {
     msg("Custom linear algebra: %s",
         talisman::custom_linalg ? "enabled" : "disabled");
     msg("Using %s sampling", talisman::uniform_sampling ? "uniform" : "random");
   }
 
-  // Detection of FA/HA/XOR and FSA nodes using ABC static library
+  // Detection of FA/HA/XOR and FSA nodes via built-in structural detection
   auto abc_start = std::chrono::high_resolution_clock::now();
   try {
-    // Initialize ABC
-    abc_interface::abc_init();
-
-    // Load AIG file
-    Gia_Man_t* pGia = abc_interface::load_aig(input_file);
-
     if(verbose >= 2) {
-      abc_interface::print_gia_stats(pGia);
+      print_aig_stats();
     }
 
-    // Detect HA/FA/XOR first to populate cache.vAdds for get_kcover_nodes
+    // Detect HA/FA/XOR first to populate the cache for get_kcover_nodes
     std::vector<HalfAdder> ha_list;
     std::vector<FullAdder> fa_list;
     // NOTE: xor_list is kept for API compatibility but not used since affine
     // cuts cover it
     std::vector<XorRemain> xor_list;
-    if(abc_interface::detect_ha_fa_xor(pGia, ha_list, fa_list, xor_list)) {
+    if(detect_ha_fa_xor(ha_list, fa_list, xor_list)) {
       if(verbose >= 2) {
         // XOR-remaining count is no longer relevant since we use affine cuts
         // instead
-        msg("ABC detected FA count: %zu, HA count: %zu",
+        msg("detected FA count: %zu, HA count: %zu",
             fa_list.size(),
             ha_list.size());
       }
@@ -324,33 +330,30 @@ main(int argc, char** argv) {
         check_linpoly_cache(subcircuit_depth, prime);
       }
     } else {
-      warning("ABC HA/FA/XOR detection failed. Proceeding without it.");
+      warning("HA/FA/XOR detection failed. Proceeding without it.");
     }
 
     // Get K-Cover nodes (reverse_fsa_nodes and boundary_nodes)
-    // Now uses cached vAdds from detect_ha_fa_xor via get_detection_cache()
+    // Reuses the adder pairs cached by detect_ha_fa_xor above.
     std::vector<int> reverse_fsa_nodes;
     std::vector<int> boundary_nodes;
-    int k = 0;
-    if(abc_interface::get_kcover_nodes(
-         pGia, k, reverse_fsa_nodes, boundary_nodes)) {
+    if(get_kcover_nodes(reverse_fsa_nodes, boundary_nodes)) {
       if(verbose >= 2) {
-        msg("ABC detected %zu reverse fsa nodes and %zu boundary nodes.",
+        msg("detected %zu reverse fsa nodes and %zu boundary nodes.",
             reverse_fsa_nodes.size(),
             boundary_nodes.size());
       }
       mark_fsa(reverse_fsa_nodes, boundary_nodes);
     } else {
-      warning("ABC K-Cover detection failed. Proceeding without it.");
+      warning("K-Cover detection failed. Proceeding without it.");
     }
 
-    // Cleanup ABC
-    abc_interface::clear_detection_cache();// Clear cached vAdds/vXors
-    abc_interface::free_gia(pGia);
-    abc_interface::abc_cleanup();
+    clear_detection_cache();
 
   } catch(const std::exception& e) {
-    warning("ABC Error: %s. Proceeding without adder detection.", e.what());
+    warning("Candidate detection error: %s. Proceeding without adder "
+            "detection.",
+            e.what());
   }
   // testing cache linear polynomial
   if(verbose >= 2) {

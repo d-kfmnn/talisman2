@@ -10,7 +10,7 @@
 
 #include <algorithm>// for std::find
 #include <iostream>
-#include <flint/nmod.h>
+#include <nmod.h>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>

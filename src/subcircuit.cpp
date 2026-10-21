@@ -17,7 +17,7 @@
 #include <functional>
 #include <random>
 
-#include <cmsgen.h>
+#include <cmsgen/cmsgen.h>
 
 /*------------------------------------------------------------------------*/
 
@@ -31,6 +31,12 @@ using thread_pool = std::unique_ptr<BS::thread_pool<BS::none>>;
 extern thread_pool pool;
 
 const size_t batch_size = 64;
+
+// Number of row blocks the uniform (weighted) sampling is split into. This is a
+// fixed constant rather than the worker count so that the sampled matrix -- and
+// hence every result derived from it -- is identical on every machine.
+static constexpr int SAMPLE_BLOCKS = 8;
+
 static std::mt19937_64 gen;
 static std::uniform_int_distribution<uint64_t> dis;
 
@@ -680,12 +686,19 @@ weighted_sampling(Subcircuit& sc, nmod_mat_t mat, int sample_size) {
     idx++;
   }
 
-  int nr_threads = pool->get_thread_count();
-  int block_size = mat->r / nr_threads;
-  int remainder = mat->r % nr_threads;
+  if(mat->r == 0)
+    return;
+
+  // Fixed on purpose: `start_row` below is used as the CMSGen RNG seed, so the
+  // block layout fully determines the sample matrix. Deriving it from the pool's
+  // thread count made the sampling -- and therefore the entire guess-and-prove
+  // computation -- depend on the number of cores of the machine.
+  const int nr_blocks = std::min<int>(SAMPLE_BLOCKS, static_cast<int>(mat->r));
+  int block_size = mat->r / nr_blocks;
+  int remainder = mat->r % nr_blocks;
   int start_row = 0;
 
-  for(int t = 0; t < nr_threads; t++) {
+  for(int t = 0; t < nr_blocks; t++) {
     int rows_for_thread = block_size + (t < remainder ? 1 : 0);
     int end_row = start_row + rows_for_thread;
 

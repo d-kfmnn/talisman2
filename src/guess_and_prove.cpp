@@ -164,12 +164,15 @@ try_eliminate_linear_output(Gate* g, LinPolynomial& tmp) {
   if(out.get_size() == 0)
     return false;
 
+  if(out.get_leading_term().first != g)
+    return false;
+
   if(verbose > 0) {
     msg("Subtracting output polynomial:");
     out.print();
   }
 
-  
+
   tmp.reduce_by(out);
 
 
@@ -584,6 +587,10 @@ try_reduce_by_stored_poly(Gate* lm, LinPolynomial& tmp) {
     return false;
 
   LinPolynomial stored_poly = *(lm->get_gatepoly());
+
+  if(stored_poly.get_leading_term().first != lm)
+    return false;
+
   if(verbose > 0) {
     msg("Found stored polynomial for gate %s, trying to reduce.",
         lm->get_var_name().c_str());

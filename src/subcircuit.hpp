@@ -9,7 +9,7 @@
 #ifndef TALISMAN_SRC_SUBCIRCUIT_H_
 #define TALISMAN_SRC_SUBCIRCUIT_H_
 /*------------------------------------------------------------------------*/
-#include <flint/nmod_mat.h>
+#include <nmod_mat.h>
 #include <unordered_set>
 #include <vector>
 

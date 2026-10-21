@@ -94,4 +94,9 @@ int write_model(FILE *file)
   return aiger_write_to_file(model, aiger_binary_mode, file);
 }
 /*------------------------------------------------------------------------*/
+aiger *get_model()
+{
+  return model;
+}
+/*------------------------------------------------------------------------*/
 } // namespace talisman

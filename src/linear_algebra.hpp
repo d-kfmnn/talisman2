@@ -13,7 +13,7 @@
 #include "gate.hpp"
 #include "libpopcnt.h"
 
-#include <flint/nmod_mat.h>
+#include <nmod_mat.h>
 #include <random>
 #include <vector>
 /*------------------------------------------------------------------------*/

@@ -13,8 +13,8 @@
 #include <unordered_map>
 
 #include "fast_mod.hpp"
-#include <flint/nmod.h>
-#include <flint/nmod_vec.h>
+#include "nmod.h"
+#include "nmod_vec.h"
 
 using namespace talisman;
 

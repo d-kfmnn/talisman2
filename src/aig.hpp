@@ -157,6 +157,15 @@ unsigned slit(unsigned i);
 */
 int write_model(FILE *file);
 
+/**
+    Returns the internal aiger* model used to store the parsed input AIG.
+    Exposed so other translation units can walk the AND/PI/PO structure
+    directly without re-parsing the file.
+
+    @return the aiger* model (valid after parse_aig() has been called)
+*/
+aiger *get_model();
+
 } // namespace talisman
 
 #endif // TALISMAN_SRC_AIG_H_

@@ -9,6 +9,7 @@
 
 #include "guess.hpp"
 #include "linear_algebra.hpp"
+#include "nmod.h"
 #include "prove.hpp"
 #include "subcircuit.hpp"
 #include "thread_pool.hpp"

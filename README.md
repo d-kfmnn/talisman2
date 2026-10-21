@@ -4,13 +4,15 @@ TalisMan Version 2.0
 is a verification and analysis tool for AIG-based circuits.
 It combines algebraic reasoning and SAT-based techniques using
 CaDiCaL, FLINT, PBLib, and cmsgen.
-These tools will automatically be fetched and locally installed.
+PBLib and cmsgen are included in this repository,
+CaDiCaL and FLINT have to be provided (see below).
 
 In the corresponding IJCAR'26 paper 
 C. Hofstadler, D.Kaufmann, and C. Chen
 Avoiding Big Integers: Parallel Multimodular Algebraic Verification of Arithmetic Circuits
 
-we have used the following versions of the dependencies
+we have used the version of TalisMan tagged ijcar26
+and the following versions of the dependencies
 CaDiCaL 2.2.0
 FLINT 3.4.0
 PBLib 1.2.1
@@ -25,8 +27,10 @@ Prerequisites
 You need:
 
 - CMake >= 3.16
-- GCC or Clang
-- Autoconf, Automake, and Libtool (required for FLINT and CaDiCaL)
+- GCC or Clang (C++20)
+- GMP (including its C++ interface gmpxx)
+- FLINT 3
+- CaDiCaL (built from source, see below)
 
 
 Linux (Ubuntu):
@@ -34,23 +38,39 @@ Linux (Ubuntu):
     sudo apt install \
     build-essential \
     cmake \
-    autoconf \
-    automake \
-    libtool 
+    libgmp-dev \
+    libflint-dev
 
 
 macOS:
 
-    brew install cmake git autoconf automake libtool
+    brew install cmake git gmp flint
+
+
+CaDiCaL:
+
+    git clone https://github.com/arminbiere/cadical.git
+    cd cadical && ./configure && make -j && cd ..
 
 
 ------------------------------------------------------------
 Building
 ------------------------------------------------------------
 
-Configure:
+Build cmsgen (included in includes/cmsgen):
 
-    cmake -S . -B build
+    cmake -S includes/cmsgen -B build/cmsgen \
+      -DBUILD_SHARED_LIBS=OFF -DMANPAGE=OFF -DNOZLIB=ON
+    cmake --build build/cmsgen --target cmsgen CopyPublicHeaders -j
+
+Configure (adapt the paths to CaDiCaL and FLINT):
+
+    cmake -S . -B build \
+      -DCADICAL_INCLUDE_DIR=/path/to/cadical/src \
+      -DCADICAL_LIBRARY_DIR=/path/to/cadical/build \
+      -DFLINT_INCLUDE_DIR=/usr/include \
+      -DFLINT_LIBRARY=/usr/lib/x86_64-linux-gnu/libflint.so \
+      -Dcmsgen_DIR=$PWD/build/cmsgen
 
 Build:
 
@@ -60,13 +80,16 @@ The executable will be located at:
 
     build/talisman
 
+Test:
+
+    ./build/talisman examples/abc6.aig -mult-spec
 
 
-If something goes wrong, remove the build directory and rebuild:
+
+If something goes wrong, remove the build directory
+and repeat the steps above (including cmsgen):
 
     rm -rf build
-    cmake -S . -B build
-    cmake --build build -j
 
 ------------------------------------------------------------
 Usage
@@ -99,7 +122,7 @@ General Options
     --custom-linalg <0|1>     Use custom linear algebra routines
                               Default: 1
 
-    -primes <0|1>             Prime selection strategy
+    --primes <0|1>            Prime selection strategy
                               0 = structured
                               1 = random
 
@@ -110,10 +133,10 @@ General Options
 
     --sc-depth <int>          Subcircuit depth (default: 2)
 
-    --no-trust-abc            Do not trust ABC's linear polynomial cache
-                              (perform SAT checks instead)
+    --trust-abc               Trust the linear polynomial cache
+                              (skip its SAT checks)
 
-    --uniform-sampling <0|1>  Disable uniform sampling (default: 1)
+    --uniform-sampling <0|1>  Use uniform sampling (default: 1)
 
 ------------------------------------------------------------
 Examples
@@ -131,16 +154,15 @@ Increase verbosity:
 
     ./build/talisman input.aig -mult-spec -v 3
 
-Disable trusting ABC:
+Trust the linear polynomial cache:
 
-    ./build/talisman input.aig -mult-spec --no-trust-abc
+    ./build/talisman input.aig -mult-spec --trust-abc
 
 ------------------------------------------------------------
 Notes
 ------------------------------------------------------------
 
-- Dependencies are fetched and built automatically by CMake.
-- The first build may take several minutes.
+- Adders are detected by TalisMan itself, ABC is no longer needed.
 - If unexpected behaviour occurs, delete the build directory and rebuild.
 
 

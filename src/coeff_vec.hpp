@@ -12,7 +12,7 @@
 #include <iostream>
 #include <vector>
 
-#include <flint/nmod.h>
+#include <nmod.h>
 
 namespace talisman {
 

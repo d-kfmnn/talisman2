@@ -5,202 +5,162 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-include(FetchContent)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
-# ============================================================
-# Dependencies via FetchContent
-# ============================================================
+# Allow user to specify Cadical include dir if it's not in standard locations
+set(CADICAL_INCLUDE_DIR "" CACHE PATH "Path to CaDiCaL include directory")
 
-# FLINT
-include(ExternalProject)
+# Sanitizer option
+option(SANITIZE "Enable AddressSanitizer and UBSan" OFF)
 
-ExternalProject_Add(flint_external
-  GIT_REPOSITORY https://github.com/wbhart/flint2.git
-  GIT_TAG v3.2.0
-  BUILD_IN_SOURCE 1
-  CONFIGURE_COMMAND ./bootstrap.sh && ./configure
-  BUILD_COMMAND make -j
-  INSTALL_COMMAND ""
-  BUILD_BYPRODUCTS
-    ${CMAKE_BINARY_DIR}/flint_external-prefix/src/flint_external/libflint.so
-)
+# Compile flags
+set(COMMON_FLAGS -Wall -Wextra -O3 -DNDEBUG -DHAVEGETRUSAGE -DHAVEUNLOCKEDIO)
+if(SANITIZE)
+  list(APPEND COMMON_FLAGS -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g)
+endif()
+add_compile_options(${COMMON_FLAGS})
 
-
-# Correct path to produced shared library
-set(FLINT_LIB
-  ${CMAKE_BINARY_DIR}/flint_external-prefix/src/flint_external/libflint.so
-)
-
-add_library(flint SHARED IMPORTED GLOBAL)
-
-set_target_properties(flint PROPERTIES
-  IMPORTED_LOCATION ${FLINT_LIB}
-)
-
-add_dependencies(flint flint_external)
-
-
-
-include(ExternalProject)
-
-ExternalProject_Add(abc_external
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/includes/abc
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/includes/abc/rebuild_without_cadical.sh
-  INSTALL_COMMAND ""
-  BUILD_IN_SOURCE 1
-  BUILD_BYPRODUCTS
-    ${CMAKE_CURRENT_SOURCE_DIR}/includes/abc/libabc.a
-)
-
-
-add_library(abc STATIC IMPORTED GLOBAL)
-
-set_target_properties(abc PROPERTIES
-  IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/includes/abc/libabc.a
-)
-
-add_dependencies(abc abc_external)
-
-
-
-
-
-# CaDiCaL
-set(CADICAL_SRC_DIR ${CMAKE_BINARY_DIR}/cadical-src)
-
-ExternalProject_Add(cadical_external
-  GIT_REPOSITORY https://github.com/arminbiere/cadical.git
-  GIT_TAG master
-  BUILD_IN_SOURCE 1
-
-  # ---- PATCH STEP ----
-  PATCH_COMMAND
-    ${CMAKE_COMMAND} -E echo "Patching CaDiCaL options.hpp" &&
-    ${CMAKE_COMMAND} -E sleep 1 &&
-    sed -i
-    "s/OPTION( factor,            1,  0,  1,0,1,1, \"bounded variable addition\")/OPTION( factor,            0,  0,  1,0,1,1, \"bounded variable addition\")/"
-    src/options.hpp
-
-  CONFIGURE_COMMAND ./configure
-  BUILD_COMMAND make -j
-  INSTALL_COMMAND ""
-  BUILD_BYPRODUCTS
-    ${CMAKE_BINARY_DIR}/cadical_external-prefix/src/cadical_external/build/libcadical.a
-)
-
-
-# Create imported target manually
-add_library(cadical STATIC IMPORTED GLOBAL)
-
-set_target_properties(cadical PROPERTIES
-  IMPORTED_LOCATION ${CMAKE_BINARY_DIR}/cadical_external-prefix/src/cadical_external/build/libcadical.a
-)
-
-add_dependencies(cadical cadical_external)
-
-
-
-
-
-# PBLib
-FetchContent_Declare(
-  pblib
-  GIT_REPOSITORY https://github.com/master-keying/pblib.git
-  GIT_TAG master
-)
-FetchContent_MakeAvailable(pblib)
-
-# cmsgen
-FetchContent_Declare(
-  cmsgen
-  GIT_REPOSITORY https://github.com/meelgroup/cmsgen.git
-  GIT_TAG master
-)
-FetchContent_MakeAvailable(cmsgen)
-
-# ============================================================
-# Your Sources
-# ============================================================
-
+# Source files
 file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS src/*.cpp)
+
+# Remove testers from main target
 list(REMOVE_ITEM SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/cadical_tester.cpp")
 
+# Compile aiger.c as an object
 add_library(aiger_obj OBJECT includes/aiger/aiger.c)
 set_source_files_properties(includes/aiger/aiger.c PROPERTIES LANGUAGE C)
 
+# Suppress warnings just for aiger.c
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(aiger_obj PRIVATE -w)
+elseif(MSVC)
+  target_compile_options(aiger_obj PRIVATE /w)
 endif()
 
-add_executable(talisman
-    ${SRC_FILES}
-    $<TARGET_OBJECTS:aiger_obj>
-)
+# Executable
+add_executable(talisman ${SRC_FILES} $<TARGET_OBJECTS:aiger_obj>)
 
-# Include directory added manually to your executable
-target_include_directories(talisman PRIVATE
-  ${FLINT_INSTALL_DIR}/include
-  ${cmsgen_SOURCE_DIR}/src
-  ${CMAKE_BINARY_DIR}/cadical_external-prefix/src/cadical_external/src
-)
+# ---- Find GMP and GMPXX manually ----
+find_library(GMP_LIBRARY NAMES gmp PATHS ${CMAKE_LIBRARY_PATH})
+find_path(GMP_INCLUDE_DIR NAMES gmp.h PATHS ${CMAKE_INCLUDE_PATH})
+if(NOT GMP_LIBRARY OR NOT GMP_INCLUDE_DIR)
+  message(FATAL_ERROR "GMP library or headers not found")
+endif()
+message(STATUS "GMP library found at: ${GMP_LIBRARY}")
+message(STATUS "GMP include dir found at: ${GMP_INCLUDE_DIR}")
 
-# THIS LINE IS ALSO IMPORTANT
-#add_dependencies(talisman flint_external)
-add_dependencies(talisman abc_external)
+find_library(GMPXX_LIBRARY NAMES gmpxx PATHS ${CMAKE_LIBRARY_PATH})
+find_path(GMPXX_INCLUDE_DIR NAMES gmpxx.h PATHS ${CMAKE_INCLUDE_PATH})
+if(NOT GMPXX_LIBRARY OR NOT GMPXX_INCLUDE_DIR)
+  message(FATAL_ERROR "GMPXX library not found")
+endif()
+message(STATUS "GMPXX library found at: ${GMPXX_LIBRARY}")
 
+# ---- FLINT: force user-provided paths (no find_package) ----
+set(FLINT_INCLUDE_DIR "" CACHE PATH "Path to FLINT include directory (parent include dir, contains flint/)")
+set(FLINT_LIBRARY "" CACHE FILEPATH "Path to FLINT library file (libflint.so or libflint.a)")
 
-target_include_directories(talisman PRIVATE
-  ${CMAKE_BINARY_DIR}/flint_external-prefix/src/flint_external
-)
-
-
-
-target_compile_options(talisman PRIVATE
-    -Wall -Wextra -O3 -DNDEBUG
-    -DHAVEGETRUSAGE
-    -DHAVEUNLOCKEDIO
-)
-
-# ============================================================
-# ABC (inside includes/)
-# ============================================================
-
-set(ABC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/includes/abc")
-
-if(NOT EXISTS "${ABC_ROOT}")
-  message(FATAL_ERROR "ABC directory not found at includes/abc")
+if(NOT FLINT_INCLUDE_DIR OR NOT FLINT_LIBRARY)
+  message(FATAL_ERROR "Provide -DFLINT_INCLUDE_DIR=/path/to/include and -DFLINT_LIBRARY=/path/to/libflint.so (or .a)")
 endif()
 
-add_library(abc_stubs OBJECT src/abc_stubs.c)
-set_source_files_properties(src/abc_stubs.c PROPERTIES LANGUAGE C)
-
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(abc_stubs PRIVATE -w)
+# Validate FLINT include dir: must contain flint/nmod.h
+if(NOT EXISTS "${FLINT_INCLUDE_DIR}/flint/nmod.h")
+  message(FATAL_ERROR
+    "flint/nmod.h not found under ${FLINT_INCLUDE_DIR}. "
+    "Set FLINT_INCLUDE_DIR to the parent include dir (e.g. ~/.local/include)."
+  )
 endif()
 
-target_include_directories(talisman PRIVATE
-    "${ABC_ROOT}/src"
+# Support both include styles:
+#   #include <flint/nmod.h>  -> needs -I${FLINT_INCLUDE_DIR}
+#   #include <nmod_mat.h>    -> needs -I${FLINT_INCLUDE_DIR}/flint
+set(FLINT_INCLUDE_DIRS
+  "${FLINT_INCLUDE_DIR}"
+  "${FLINT_INCLUDE_DIR}/flint"
 )
 
-target_compile_definitions(talisman PRIVATE
-    USE_ABC=1
-    ABC_USE_STDINT_H=1
+# Validate FLINT library file
+if(NOT EXISTS "${FLINT_LIBRARY}")
+  message(FATAL_ERROR "FLINT library file does not exist: ${FLINT_LIBRARY}")
+endif()
+
+# Create an imported library target Flint::Flint
+add_library(Flint::Flint UNKNOWN IMPORTED)
+set_target_properties(Flint::Flint PROPERTIES
+  IMPORTED_LOCATION "${FLINT_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${FLINT_INCLUDE_DIRS}"
 )
 
-# ============================================================
-# Link Everything
-# ============================================================
+message(STATUS "Forcing user-provided FLINT")
+message(STATUS "  FLINT_INCLUDE_DIR  = ${FLINT_INCLUDE_DIR}")
+message(STATUS "  FLINT_INCLUDE_DIRS = ${FLINT_INCLUDE_DIRS}")
+message(STATUS "  FLINT_LIBRARY      = ${FLINT_LIBRARY}")
 
-target_link_libraries(talisman PRIVATE
-    flint
-    cadical
+# ---- Find CaDiCaL library and headers ----
+set(CADICAL_LIBRARY_DIR "" CACHE PATH "Path to CaDiCaL library directory")
+
+find_library(CADICAL_LIBRARY
+  NAMES cadical
+  HINTS ${CADICAL_LIBRARY_DIR}
+  PATHS ${CMAKE_LIBRARY_PATH}
+  NO_DEFAULT_PATH
+)
+
+if(NOT CADICAL_LIBRARY)
+  message(FATAL_ERROR "CaDiCaL library not found. Please set CADICAL_LIBRARY_DIR by adding \"-DCADICAL_LIBRARY_DIR=/path/to/dir/\"")
+endif()
+
+message(STATUS "Using CaDiCaL headers from: ${CADICAL_INCLUDE_DIR}")
+
+if(NOT CADICAL_INCLUDE_DIR)
+  message(FATAL_ERROR "cadical headers not found (cadical.hpp)")
+endif()
+
+message(STATUS "cadical library found at: ${CADICAL_LIBRARY}")
+message(STATUS "cadical include dir found at: ${CADICAL_INCLUDE_DIR}")
+
+# Candidate (half-/full-adder, K-cover) detection is implemented in-tree in
+# src/candidates.cpp -- no external EDA library dependency needed.
+target_link_libraries(${PROJECT_NAME} PRIVATE
+  pthread
+  m
+)
+
+# ---- Include directories ----
+# GMP includes
+target_include_directories(talisman PRIVATE ${GMP_INCLUDE_DIR} ${GMPXX_INCLUDE_DIR})
+# FLINT includes (support both include styles)
+target_include_directories(talisman PRIVATE ${FLINT_INCLUDE_DIRS})
+# CaDiCaL includes
+target_include_directories(talisman PRIVATE ${CADICAL_INCLUDE_DIR})
+
+# Add pblib subdirectory
+add_subdirectory(includes/pblib)
+# Suppress warnings from PBLib
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(pblib PRIVATE -w)
+elseif(MSVC)
+  target_compile_options(pblib PRIVATE /w)
+endif()
+target_include_directories(talisman PRIVATE includes/pblib)
+
+# cmsgen includes
+find_package(cmsgen REQUIRED)
+target_include_directories(talisman PRIVATE ${CMSGEN_INCLUDE_DIRS})
+target_link_libraries(talisman PRIVATE cmsgen)
+
+# ---- Link Libraries ----
+target_link_libraries(talisman
+  PRIVATE
+    Flint::Flint
+    ${GMPXX_LIBRARY}
+    ${GMP_LIBRARY}
+    ${CADICAL_LIBRARY}
     PBlib::pblib
-    cmsgen
-    abc
-    $<TARGET_OBJECTS:abc_stubs>
-    pthread
-    dl
-    m
 )
 
+# Apply sanitizer link flags
+if(SANITIZE)
+  target_link_options(talisman PRIVATE -fsanitize=address -fsanitize=undefined)
+endif()
